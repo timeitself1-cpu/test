@@ -1,0 +1,21 @@
+name: Extract Repository
+on: workflow_dispatch
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run Bootstrap Script
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          python bootstrap.py --target . --commit
+      - name: Push Unpacked Files
+        run: git push
