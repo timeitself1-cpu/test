@@ -26,9 +26,19 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Run bootstrap script
+      - name: Extract repository without committing
         run: |
-          python bootstrap.py --target . --commit --force
+          python bootstrap.py --target . --force
+
+      - name: Move restricted CI workflow out of workflows directory
+        run: |
+          test -f .github/workflows/ci.yml
+          mv .github/workflows/ci.yml ci.workflow.yml
+
+      - name: Commit unpacked repository
+        run: |
+          git add .
+          git commit -m "Bootstrap diagnostic-controller v1.0"
 
       - name: Push unpacked repository
         run: |
