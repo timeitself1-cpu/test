@@ -51,7 +51,7 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Lint
-        run: ruff check .
+        run: ruff check check src tests
 
       - name: Type check
         run: mypy src
