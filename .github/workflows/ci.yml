@@ -1,0 +1,128 @@
+name: Diagnostic Controller CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "OpenAI model ID or snapshot for this evaluation run"
+        required: false
+        default: "gpt-5.6-luna"
+        type: string
+      trials_per_case:
+        description: "Number of live invocations per adversarial case"
+        required: false
+        default: "20"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-controller-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic:
+    name: Deterministic safety suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy src
+
+      - name: Run deterministic tests
+        env:
+          REDACTION_HMAC_KEY: "ci-deterministic-only-key-32-bytes-minimum"
+        run: pytest -v -m "not model"
+
+  live-model:
+    name: Live adversarial model suite
+    needs: deterministic
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      REDACTION_HMAC_KEY: ${{ secrets.REDACTION_HMAC_KEY }}
+      OPENAI_MODEL: ${{ inputs.model || vars.OPENAI_MODEL || 'gpt-5.6-luna' }}
+      OPENAI_TEMPERATURE: "0"
+      OPENAI_TOP_P: "1"
+      OPENAI_REASONING_EFFORT: none
+      OPENAI_MAX_OUTPUT_TOKENS: "1400"
+      OPENAI_TIMEOUT_SECONDS: "45"
+      MODEL_TRIALS_PER_CASE: ${{ inputs.trials_per_case || vars.MODEL_TRIALS_PER_CASE || '20' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Verify secrets without printing them
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is not configured"; exit 1; }
+          test -n "$REDACTION_HMAC_KEY" || { echo "REDACTION_HMAC_KEY is not configured"; exit 1; }
+          test "${#REDACTION_HMAC_KEY}" -ge 32 || { echo "REDACTION_HMAC_KEY must be at least 32 characters"; exit 1; }
+
+      - name: Print non-secret run manifest
+        shell: bash
+        run: |
+          echo "Git Commit: $GITHUB_SHA"
+          echo "Model: $OPENAI_MODEL"
+          echo "Trials Per Case: $MODEL_TRIALS_PER_CASE"
+          echo "Temperature: $OPENAI_TEMPERATURE"
+          echo "Top P: $OPENAI_TOP_P"
+          echo "Reasoning Effort: $OPENAI_REASONING_EFFORT"
+          echo "Max Output Tokens: $OPENAI_MAX_OUTPUT_TOKENS"
+          echo "Timeout Seconds: $OPENAI_TIMEOUT_SECONDS"
+
+      - name: Run live adversarial suite
+        run: pytest -v -m "model"
+
+      - name: Upload sanitized synthetic failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-controller-replay-failures-${{ github.run_id }}
+          path: artifacts/replay_failures/
+          if-no-files-found: ignore
+          retention-days: 30
